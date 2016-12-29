@@ -1,0 +1,449 @@
+#!/usr/bin/perl
+
+#### PAC.pl v1.0 will provide a menu for nco_pa process commands.  
+#### Processes on every PA defined within the $OMNIHOME/etc/nco_pa.conf file will be available.
+#### Author: Jeff Miller
+#### Date: 02-01-2010
+#
+#### Update 05-24-2011
+#### Passing the <-l> switch will only work with local PA ; PA Environment Variable must be set
+#
+#### Update 01-03-2013
+#### Added Desired State functionality and fixed logfile viewing
+#
+
+use strict;
+use strict;
+use Fcntl;
+
+my $omnibin = "/opt/netcool/omnibus/bin";
+my $omnietc = "/opt/netcool/omnibus/etc";
+my $omnipa = "$omnietc/nco_pa.conf";
+my $logfile="$0.log";
+my $pid=$$;
+my $pidfile="$0.pid";
+my $pwd;
+my $PAS;
+my @PAS;
+my $PROCS;
+my @PROCS;
+my $mainselection;
+
+
+####Setup logging
+####
+####
+sub Logging {
+
+	sysopen(LOG, $logfile, O_WRONLY | O_APPEND | O_CREAT) or die "Cannot open $logfile $!\n";
+}
+
+
+####Check the logfile size and if need be, rotate, then open.
+####
+####
+
+sub RotateLog {
+
+	my $logmax=100000;
+
+	my $dev;
+	my $inode;
+	my $mode;
+	my $nlink;
+	my $uid;
+	my $gid;
+	my $rdev;
+	my $size;
+	my $atime;
+	my $mtime;
+	my $ctime;
+	my $blksize;
+	my $blocks;
+
+	($dev,$inode,$mode,$nlink,$uid,$gid,$rdev,$size,$atime,$mtime,$ctime,$blksize,$blocks) = stat $logfile;
+
+	if ( $size > $logmax) {
+		rename ("$logfile", "$logfile.old");
+	}
+}
+
+
+#### Is this process running
+####
+####
+
+sub isRun {
+
+	my $date=(localtime);
+
+	if ( -e $pidfile ) {
+		print LOG "$date - $0 is already running, exiting\n";
+		print LOG "\n";
+		print "$date - $0 is already running, exiting\n";
+		exit (1);
+	}
+	else {
+		open(PID, ">> $pidfile");
+		print PID "$pid\n";
+	}
+}
+
+
+#### Get the password
+####
+####
+
+sub getPWD {
+
+	my $rawpwd;
+
+        system("clear");
+        print "\n";
+        print "netcool passphrase?\n";
+        print "\n";
+
+        system('stty', '-echo');
+        $rawpwd=<STDIN>;
+        chomp $rawpwd;
+        $pwd=`$omnibin/nco_g_crypt '$rawpwd'`;
+        system('stty', 'echo');
+}
+
+
+#### Get the PAs to work with
+####
+####
+
+sub getPAS {
+
+	my $tmpline;
+	my @SPAS;
+	my @TMPPAS;
+
+	if ($ARGV[0] eq '-l') {
+
+		my $LocalPA = $ENV{'PA_SERVER'};
+		push(@SPAS, $LocalPA);
+	
+	}
+	
+	else {
+        
+		sysopen(FH, "$omnipa", O_RDONLY) or die "Cannot open file $omnipa $!\n";
+
+        	while ($tmpline = <FH>) {
+                	unless ($tmpline =~ /host\s\'/) {
+                        	next;
+                	}
+                	else {
+                        	@TMPPAS = split(/\'/, $tmpline);
+                        	push(@SPAS, $TMPPAS[3]);
+	                }
+		}
+
+		close FH;
+
+	}
+        
+	return(\@SPAS);
+
+}	
+
+
+#### Get the Processes to work with
+####
+####
+
+sub getPROC {
+
+	my $pa;
+        my @OUT;
+        my @WORD;
+	my @SPROCS;
+
+        foreach $pa (@PAS) {
+                chomp $pa;
+                @OUT = `$omnibin/nco_pa_status -server $pa -user netcool -password $pwd`;
+		system("clear");
+		print "Building PA / Process listing.  This could take a minute.\n\n";
+                foreach (@OUT) {
+                        if ($_ =~ m/-+/ || $_ =~ m/^Service Name/){
+                                next;
+                        }
+                        else {
+                                @WORD = split(/\s+/, $_);
+				push(@SPROCS, "$pa,$WORD[1]");
+				print "\tDiscovered process $WORD[1] running on PA $pa\n";
+                        }
+                }
+        }
+	print "\n";
+	return(\@SPROCS);
+}
+
+
+#### Get the status of all the PAs
+####
+####
+
+sub allPASTAT {
+
+	my $pa;
+	my @OUT;
+	my @WORD;
+	my @SUBWORDS;
+	my $desiredState;
+
+	foreach $pa (@PAS) {
+		chomp $pa;
+		@OUT = `$omnibin/nco_pa_status -server $pa -user netcool -password $pwd`;
+		foreach (@OUT) {
+        		if ($_ =~ m/-+/ || $_ =~ m/^Service Name/){
+                		next;
+			}
+        		else {
+                		@WORD = split(/\s+/, $_);
+                		@SUBWORDS = split(/netcool/,$WORD[2]);
+                                my $searchString = "$pa $WORD[1]";
+				open(EXCEPTIONS,"$0.DEV.exception.list") or die $!;
+                               	if(grep{/$searchString/} <EXCEPTIONS>){
+                                	$desiredState = "DEAD";
+                                }
+				elsif(grep{/FORK/} $WORD[1]){
+					$desiredState = $WORD[3];
+				}	 
+                                else{
+                                	$desiredState = "RUNNING";
+                                }
+                        }
+               		print "$pa\t$WORD[1]\t\t$WORD[3]\t\t$desiredState\t\t$SUBWORDS[0]\t$WORD[4]\n";
+			close EXCEPTIONS;
+		}
+	}
+}
+
+
+#### Get the status of all the PAs and don't show process exceptions
+####
+####
+
+sub allPARSTAT {
+
+        my $pa;
+        my @OUT;
+        my @WORD;
+        my @SUBWORDS;
+        my $desiredState;
+
+        foreach $pa (@PAS) {
+                chomp $pa;
+                @OUT = `$omnibin/nco_pa_status -server $pa -user netcool -password $pwd`;
+                foreach (@OUT) {
+                        if ($_ =~ m/-+/ || $_ =~ m/^Service Name/){
+                                next;
+                        }
+                        else {
+                                @WORD = split(/\s+/, $_);
+                                @SUBWORDS = split(/netcool/,$WORD[2]);
+                                my $searchString = "$pa $WORD[1]";
+                                open(EXCEPTIONS,"$0.DEV.exception.list") or die $!;
+                                if(grep{/$searchString/} <EXCEPTIONS>){
+                                        next;
+                                }
+                                elsif(grep{/FORK/} $WORD[1]){
+                                        $desiredState = $WORD[3];
+                                }
+                                else{
+                                        $desiredState = "RUNNING";
+                                }
+                        }
+                        print "$pa\t$WORD[1]\t\t$WORD[3]\t\t$desiredState\t\t$SUBWORDS[0]\t$WORD[4]\n";
+                        close EXCEPTIONS;
+                }
+        }
+}
+
+
+#### Sub Menu
+####
+####
+
+sub SubMenu {
+
+	system("clear");
+	
+	my $pa;
+	my $proc;
+	my $subselection;
+	my $date;
+	my $pout;
+	my $zout;
+
+	while() {
+		($pa,$proc)=split(/,/,$PROCS[$mainselection],2);
+		chomp $pa;
+		chomp $proc;
+		print "\n";
+		print "You are working with the $proc Process.  Press q to quit.\n";
+		print "\n";
+		print "The current status of hosting PA $pa is:\n";
+		system("$omnibin/nco_pa_status -server $pa -user netcool -password $pwd");
+		print "\n";
+		print "\n";
+		print "Select p to stop $proc.\n";
+		print "Select z to start $proc.\n";
+        	$subselection=<STDIN>;
+
+        	if ($subselection =~ /^[p|P]$/) {
+			$date=(localtime);
+			print "$date Stopping $proc\n";
+			system("$omnibin/nco_pa_stop -server $pa -user netcool -process $proc -password $pwd");
+			sleep(3);
+			$pout=`$omnibin/nco_pa_status -server $pa -user netcool -password $pwd`;
+			print LOG "$pid $date $proc STOPPED by PAC.pl\n";
+			print LOG "$pout\n";
+			MainMenu();
+		}
+
+		elsif ($subselection =~ /^[z|Z]$/) {
+			$date=(localtime);
+                	print "$date Starting $proc\n";
+	                system("$omnibin/nco_pa_start -server $pa -user netcool -process $proc -password $pwd");
+			sleep(3);
+	                $zout=`$omnibin/nco_pa_status -server $pa -user netcool -password $pwd`;
+        	        print LOG "$pid $date $proc STARTED by PAC.pl\n";
+			print LOG "$zout\n";
+                	MainMenu();
+		}
+
+        	elsif ($subselection =~ /^[q|Q]$/) {
+			MainMenu();
+        	}
+
+		else {
+                	print "Invalid selection.\n";
+                	MainMenu();
+               	}
+
+	}
+}
+
+
+#### Main Menu
+####
+####
+
+sub MainMenu {
+
+	system("clear");
+
+	my $i;
+	my $pcount;
+	my $line;
+	$mainselection;
+
+		$pcount=@PROCS;
+        	if ($pcount < 1) {
+        		print "Did not find any processes to manage.  Check your password and local PA.\n";
+		        Cleanup();
+                }
+
+		while() {
+			$i=0;
+			print "\n";
+			print "Select a Process number to work with or q to quit.\n";
+			print "\n";
+			print "Enter s for the current PA status of all Processes.\n";
+			print "\n"; 
+			print "Enter r for the current PA status of Non-Exception Processes.\n";
+                        print "\n";
+			print "Enter l to view the last 20 lines of the PAC log.\n";
+		        print "\n";
+			
+			foreach $line (@PROCS) {
+		        	print "$i $line\n";
+		        	$i++;
+			}
+			print "\n";
+			$mainselection=<STDIN>;	
+		
+			if ($mainselection =~ /^[s|S]$/) {
+				system("clear");
+				print "\n";
+				print "PA\t\tProcess\t\t\tStatus\t\tDesired State\tHost\t\t\tPID\n";
+				print "\n";
+				allPASTAT();
+				print "\n";
+
+			}
+
+                        elsif ($mainselection =~ /^[r|R]$/) {
+                                system("clear");
+                                print "\n";
+                                print "PA\t\tProcess\t\t\tStatus\t\tDesired State\tHost\t\t\tPID\n";
+                                print "\n";
+                                allPARSTAT();
+                                print "\n";
+
+                        }
+
+ 			elsif ($mainselection =~ /^[l|L]$/) {
+				system("clear");
+				print "\n"; 
+				system("tail -20 $logfile");
+		                print "\n";
+		                print "\n";
+		        }
+
+			elsif ($mainselection =~ /^[q|Q]$/) {
+				Cleanup();
+			}
+
+			elsif ($mainselection =~ /\d+/ && $mainselection <= ($i - 1)) {
+				SubMenu();
+			}
+
+			else {
+				print "Invalid selection.\n";
+				MainMenu();
+			}
+		}
+}
+
+
+####Cleanup the mess we made.
+####
+####
+
+sub Cleanup {
+
+	close PID;
+	close LOG;
+	unlink "$pidfile" || die (print "Cannot unlink $pidfile: $!\n");
+	exit 0;
+
+}
+
+
+####Main
+####
+####
+
+RotateLog();
+Logging();
+### For multiple instances in DEV ### isRun();
+getPWD();
+
+$PAS = getPAS();
+@PAS = @$PAS;
+
+print "Building PA / Process listing.  This could take a minute.\n";
+
+$PROCS = getPROC();
+@PROCS = @$PROCS;
+
+MainMenu();
+
+
+####EOF
