@@ -1,7 +1,8 @@
 # PAC
-Netcool PA Control
+Tivoli Netcool: Process Agect Control
 
-# PAC.pl provides a menu for nco_pa process commands.  
+# PAC.pl provides a menu for nco_pa process commands.
+
 Processes on every PA defined within the $OMNIHOME/etc/nco_pa.conf file will be available.
 Author: Jeff Miller
 Date: 02-01-2010
