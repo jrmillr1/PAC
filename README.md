@@ -1,2 +1,2 @@
 # PAC
-PA Control
+Naetcool PA Control
