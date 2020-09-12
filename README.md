@@ -1,5 +1,5 @@
 # PAC
-Tivoli Netcool: Process Agect Control
+Tivoli Netcool: Process Agent Control
 
 # PAC.pl provides a menu for nco_pa process commands.
 
