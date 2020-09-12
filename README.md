@@ -1,2 +1,2 @@
 # PAC
-Naetcool PA Control
+Netcool PA Control
